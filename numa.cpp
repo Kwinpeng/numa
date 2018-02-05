@@ -1,17 +1,38 @@
+/****************************************************************
+ * FileName: numa.cpp
+ * Author  : Kunpeng WANG
+ * Version :
+ * Description:
+ *
+ * History :
+ *
+ * Todolist:
+ *   1. test numa
+ *   2. vectorization
+ *
+ ****************************************************************/
+
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
 
 #include <sys/types.h>
-#include <unistd.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include <numa.h>
 #include <omp.h>
 
-#include <timer.hpp>
+#include "timer.hpp"
 
-///////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////
+
+/* Global configuration */
+const int pf  = 2;
+const int dim = 280 * pf;
+const int batchsize = 29093774;
+
+//////////////////////////////////////////////////////////////////
 
 void read_data(const int size,
                int *_coords,
@@ -70,11 +91,11 @@ void system_detect()
 
 void numa_oblivious_test()
 {
-    system_detect();
+    printf("========================================\n");
+    printf("NUMA oblivious test\n");
+    printf("----------------------------------------\n");
 
-    const int pf  = 2;
-    const int dim = 280 * pf;
-    const int batchsize = 29093774;
+    system_detect();
 
     double *_volume = (double*)malloc(dim * dim * (dim / 2 + 1) * 2 * sizeof(double));
     double *_weight = (double*)malloc(dim * dim * (dim / 2 + 1) * sizeof(double));
@@ -116,6 +137,88 @@ void numa_oblivious_test()
     free(_voxels_weit);
 }
 
+void numa_node_local_test()
+{
+    printf("========================================\n");
+    printf("NUMA node local test\n");
+    printf("----------------------------------------\n");
+
+    int ncpus, nodes, cpus_per_node;
+    system_detect(ncpus, nodes, cpus_per_node);
+
+    /* specify the node */
+    const int node = 0;
+
+    /* detect cpus on this node */
+    int num_cpus_onnode = 0;
+    struct bitmask *cpus_onnode = numa_allocate_cpumask();
+    numa_node_to_cpus(node, cpus_onnode);
+    for (int cpuid = 0; cpuid < ncpus; ++cpuid) {
+        if (numa_bitmask_isbitset(cpus_onnode , cpuid))
+            num_cpus_onnode++;
+    }
+
+    printf("%d threads in use\n", num_cpus_onnode);
+
+    /* configure omp threads */
+    omp_set_dynamic(0);
+    omp_set_num_threads(num_cpus_onnode);
+
+    #pragma omp parallel for
+    for (int tid = 0; tid < num_cpus_onnode; tid++) {
+        if (numa_run_on_node(node) != 0) {
+            printf("Error: thread configuration on specified node failed\n");
+            exit(-1);
+        }
+    }
+
+    /* allocate numa-aware memory on node local */
+    const int volsize = dim * dim * (dim / 2 + 1);
+
+    double *numa_volume, *numa_weight;
+    numa_volume = (double*)numa_alloc_onnode(volsize * 2 * sizeof(double), node);
+    numa_weight = (double*)numa_alloc_onnode(volsize * sizeof(double), node);
+
+    int *numa_coords = (int*)numa_alloc_onnode(batchsize * sizeof(int), node);
+    
+    double *numa_vxls_real, *numa_vxls_imag, *numa_vxls_weit;
+    numa_vxls_real = (double*)numa_alloc_onnode(batchsize * sizeof(double), node);
+    numa_vxls_imag = (double*)numa_alloc_onnode(batchsize * sizeof(double), node);
+    numa_vxls_weit = (double*)numa_alloc_onnode(batchsize * sizeof(double), node);
+
+    Timer timer;
+    timer.start();
+
+    /* read form file */
+    read_data(batchsize, numa_coords, numa_vxls_real, numa_vxls_imag, numa_vxls_weit);
+
+    timer.interval_timing("Data reading");
+
+    /* perform accumulation */
+    int pos = 0;
+    #pragma omp parallel for
+    for (int n = 0; n < batchsize; ++n) {
+        int current = pos + n;
+
+        int index = numa_coords[current];
+
+        #pragma omp atomic
+        numa_volume[index * 2] += numa_vxls_real[current];
+        #pragma omp atomic
+        numa_volume[index * 2 + 1] += numa_vxls_imag[current];
+        #pragma omp atomic
+        numa_weight[index * 2] += numa_vxls_weit[current];
+    }
+
+    timer.interval_timing("Accumulating");
+
+    numa_free(numa_volume, volsize * 2 * sizeof(double));
+    numa_free(numa_weight, volsize * sizeof(double));
+    numa_free(numa_vxls_real, batchsize * sizeof(double));
+    numa_free(numa_vxls_imag, batchsize * sizeof(double));
+    numa_free(numa_vxls_weit, batchsize * sizeof(double));
+}
+
 void numa_aware_test()
 {
     int ncpus, nodes, cpus_per_node;
@@ -126,37 +229,22 @@ void numa_aware_test()
 
     #pragma omp parallel for
     for (int tid = 0; tid < ncpus; tid++) {
-        int sid = tid / cpus_per_node;
-        if (numa_run_on_node(sid) != 0) {
+        int nid = tid / cpus_per_node;
+        if (numa_run_on_node(nid) != 0) {
             printf("Error: thread configuration on numa node failed\n");
             exit(-1);
         }
     }
 
-    #pragma omp parallel for
-    for (int tid = 0; tid < ncpus; tid++) {
-        #pragma omp critical
-        {
-            printf("thread no.%2d:\n", omp_get_thread_num());
-
-            printf("  %d cpus avaliable for use.\n", numa_num_task_cpus());
-
-            printf("  %d nodes avaliable for use: ", numa_num_task_nodes());
-            struct bitmask *allow_cpus = numa_get_run_node_mask();
-            for (int i = 0; i < ncpus; i++) {
-                if (numa_bitmask_isbitset(allow_cpus, i))
-                    printf(" %d", i);
-            }
-            printf(".\n");
-        }
-    }
 }
 
-///////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////
 
 int main(int argc, char *argv[])
 {
     numa_oblivious_test();
+
+    //numa_node_local_test();
 
     return 0;
 }
