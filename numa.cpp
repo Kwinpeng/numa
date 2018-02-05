@@ -14,32 +14,39 @@
 ///////////////////////////////////////////////////////////////////////////
 
 void read_data(const int size,
+               int *_coords,
                double *_voxels_real,
                double *_voxels_imag,
                double *_voxels_weit)
 {
     FILE *fp;
 
-    if((fp = fopen("real.dat", "wb")) != NULL)
+    if((fp = fopen("data/coor.dat", "rb")) != NULL)
+        assert(size == fread(_coords, sizeof(int), size, fp));
+    else { printf("file not exist\n"); exit(-1); }
+    fclose(fp);
+
+    if((fp = fopen("data/real.dat", "rb")) != NULL)
         assert(size == fread(_voxels_real, sizeof(double), size, fp));
+    else { printf("file not exist\n"); exit(-1); }
     fclose(fp);
 
-    if((fp = fopen("imag.dat", "wb")) != NULL)
-        assert(fread(_voxels_imag, sizeof(double), size, fp));
+    if((fp = fopen("data/imag.dat", "rb")) != NULL)
+        assert(size == fread(_voxels_imag, sizeof(double), size, fp));
+    else { printf("file not exist\n"); exit(-1); }
     fclose(fp);
 
-    if((fp = fopen("weit.dat", "wb")) != NULL)
-        assert(fread(_voxels_weit, sizeof(double), size, fp));
+    if((fp = fopen("data/weit.dat", "rb")) != NULL)
+        assert(size == fread(_voxels_weit, sizeof(double), size, fp));
+    else { printf("file not exist\n"); exit(-1); }
     fclose(fp);
 }
 
 void numa_oblivious_test()
 {
-    const int dim = 280;
+    const int pf  = 2;
+    const int dim = 280 * pf;
     const int batchsize = 29093774;
-
-    Timer timer;
-    timer.start();
 
     double *_volume = (double*)malloc(dim * dim * (dim / 2 + 1) * 2 * sizeof(double));
     double *_weight = (double*)malloc(dim * dim * (dim / 2 + 1) * sizeof(double));
@@ -48,6 +55,11 @@ void numa_oblivious_test()
     double *_voxels_real = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_imag = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_weit = (double*)malloc(batchsize * sizeof(double));
+
+    Timer timer;
+    timer.start();
+
+    read_data(batchsize, _coords, _voxels_real, _voxels_imag, _voxels_weit);
 
     timer.interval_timing("Data reading");
 
