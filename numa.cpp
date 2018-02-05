@@ -1,77 +1,80 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cassert>
 
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/time.h>
 
 #include <numa.h>
 #include <omp.h>
 
-int tutorial()
-{
-    int i, k, w, ncpus;
-    struct bitmask *cpus;
-    int maxnode = numa_num_configured_nodes();
-
-    if (numa_available() < 0)  {
-        printf("no numa\n");
-        exit(1);
-    }
-    cpus = numa_allocate_cpumask();
-    ncpus = cpus->size;
-
-    for (i = 0; i < maxnode ; i++) {
-        if (numa_node_to_cpus(i, cpus) < 0) {
-            printf("node %d failed to convert\n",i); 
-        }       
-        printf("%d: ", i); 
-        w = 0;
-        for (k = 0; k < ncpus; k++)
-            if (numa_bitmask_isbitset(cpus, k))
-                printf(" %s%d", w>0?",":"", k);
-        putchar('\n');      
-    }
-
-    return 0;
-}
-
-void example()
-{
-    int i;
-
-    if (numa_available() < 0)  {
-        printf("Error: no numa node avaliable on this system...\n");
-        exit(1);
-    }
-
-    printf("The number of possible nodes supported in this system is %d,"\
-           " so the number of the highest possible node is %d\n",
-            numa_num_possible_nodes(),
-            numa_max_possible_node());
-
-    int num_nodes = numa_num_configured_nodes();
-    printf("The number of configured nodes in this system is %d,"\
-           " and the highest node number is %d\n",
-            num_nodes,
-            numa_max_node());
-
-    struct bitmask *nodes = numa_get_mems_allowed();
-    printf("This is the process %d, the node memory can be accessed are",
-            (int)getpid());
-    for (i = 0; i < num_nodes; ++i) {
-        if (numa_bitmask_isbitset(nodes, i))
-            printf(" %d", i);
-    }
-    printf("\n");
-
-    int ncpus = numa_num_configured_cpus();
-}
+#include <timer.hpp>
 
 ///////////////////////////////////////////////////////////////////////////
 
-void numa_oblivous_test()
+void read_data(const int size,
+               double *_voxels_real,
+               double *_voxels_imag,
+               double *_voxels_weit)
 {
-    ;
+    FILE *fp;
+
+    if((fp = fopen("real.dat", "wb")) != NULL)
+        assert(size == fread(_voxels_real, sizeof(double), size, fp));
+    fclose(fp);
+
+    if((fp = fopen("imag.dat", "wb")) != NULL)
+        assert(fread(_voxels_imag, sizeof(double), size, fp));
+    fclose(fp);
+
+    if((fp = fopen("weit.dat", "wb")) != NULL)
+        assert(fread(_voxels_weit, sizeof(double), size, fp));
+    fclose(fp);
+}
+
+void numa_oblivious_test()
+{
+    const int dim = 280;
+    const int batchsize = 29093774;
+
+    Timer timer;
+    timer.start();
+
+    double *_volume = (double*)malloc(dim * dim * (dim / 2 + 1) * 2 * sizeof(double));
+    double *_weight = (double*)malloc(dim * dim * (dim / 2 + 1) * sizeof(double));
+
+    int *_coords = (int*)malloc(batchsize * sizeof(int));
+    double *_voxels_real = (double*)malloc(batchsize * sizeof(double));
+    double *_voxels_imag = (double*)malloc(batchsize * sizeof(double));
+    double *_voxels_weit = (double*)malloc(batchsize * sizeof(double));
+
+    timer.interval_timing("Data reading");
+
+    int pos = 0;
+
+    #pragma omp parallel for
+    for (int n = 0; n < batchsize; ++n) {
+        int current = pos + n;
+
+        int index = _coords[current];
+
+        #pragma omp atomic
+        _volume[index * 2] += _voxels_real[current];
+        #pragma omp atomic
+        _volume[index * 2 + 1] += _voxels_imag[current];
+        #pragma omp atomic
+        _weight[index * 2] += _voxels_weit[current];
+    }
+
+    timer.interval_timing("Accumulating");
+
+    free(_volume);
+    free(_weight);
+    free(_coords);
+    free(_voxels_real);
+    free(_voxels_imag);
+    free(_voxels_weit);
 }
 
 void numa_aware_test()
@@ -121,11 +124,7 @@ void numa_aware_test()
 
 int main(int argc, char *argv[])
 {
-    //tutorial();
-
-    //example();
-
-    numa_aware_test();
+    numa_oblivious_test();
 
     return 0;
 }

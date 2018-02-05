@@ -1,5 +1,11 @@
+CC = g++
+FLAGS = -fopenmp
+
+INCS = -I.
+LIBS = -lnuma
+
 numa.bin: numa.cpp
-	g++ -fopenmp numa.cpp -o numa.bin -lnuma
+	$(CC) $(FLAGS) $< -o $@ $(LIBS)
 
 clean:
 	@rm -f numa.bin
