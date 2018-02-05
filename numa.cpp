@@ -21,26 +21,24 @@ void read_data(const int size,
 {
     FILE *fp;
 
-    if((fp = fopen("data/coor.dat", "rb")) != NULL)
-        assert(size == fread(_coords, sizeof(int), size, fp));
-    else { printf("file not exist\n"); exit(-1); }
+    assert((fp = fopen("data/coor.dat", "rb")) != NULL);
+    assert(size == fread(_coords, sizeof(int), size, fp));
     fclose(fp);
 
-    if((fp = fopen("data/real.dat", "rb")) != NULL)
-        assert(size == fread(_voxels_real, sizeof(double), size, fp));
-    else { printf("file not exist\n"); exit(-1); }
+    assert((fp = fopen("data/real.dat", "rb")) != NULL);
+    assert(size == fread(_voxels_real, sizeof(double), size, fp));
     fclose(fp);
 
-    if((fp = fopen("data/imag.dat", "rb")) != NULL)
-        assert(size == fread(_voxels_imag, sizeof(double), size, fp));
-    else { printf("file not exist\n"); exit(-1); }
+    assert((fp = fopen("data/imag.dat", "rb")) != NULL);
+    assert(size == fread(_voxels_imag, sizeof(double), size, fp));
     fclose(fp);
 
-    if((fp = fopen("data/weit.dat", "rb")) != NULL)
-        assert(size == fread(_voxels_weit, sizeof(double), size, fp));
-    else { printf("file not exist\n"); exit(-1); }
+    assert((fp = fopen("data/weit.dat", "rb")) != NULL);
+    assert(size == fread(_voxels_weit, sizeof(double), size, fp));
     fclose(fp);
 }
+
+///////////////////////////////////////////////////////////////////////////
 
 void numa_oblivious_test()
 {
@@ -133,6 +131,8 @@ void numa_aware_test()
         }
     }
 }
+
+///////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char *argv[])
 {
