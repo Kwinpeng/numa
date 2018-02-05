@@ -38,10 +38,40 @@ void read_data(const int size,
     fclose(fp);
 }
 
+void system_detect(int& ncpus, int& nodes, int& cpus_per_node)
+{
+    if (numa_available() < 0)  {
+        printf("Error: no numa node avaliable on this system...\n");
+        exit(1);
+    }
+
+    /* detect cpus and numa nodes */
+    ncpus = numa_num_configured_cpus();
+    nodes = numa_num_configured_nodes();
+    cpus_per_node = ncpus / nodes;
+
+    printf(" System configuration:\n");
+    printf("   # of numa node: %d\n", nodes);
+    printf("   # of cpus: %d\n", ncpus);
+    #pragma omp parallel for
+    for (int i = 0; i < ncpus; i++) {
+        if (omp_get_thread_num() == 0 && i == 0)
+            printf("   # of omp threads: %d\n", omp_get_num_threads());
+    }
+}
+
+void system_detect()
+{
+    int ncpus, nodes, cpus_per_node;
+    system_detect(ncpus, nodes, cpus_per_node);
+}
+
 ///////////////////////////////////////////////////////////////////////////
 
 void numa_oblivious_test()
 {
+    system_detect();
+
     const int pf  = 2;
     const int dim = 280 * pf;
     const int batchsize = 29093774;
@@ -62,7 +92,6 @@ void numa_oblivious_test()
     timer.interval_timing("Data reading");
 
     int pos = 0;
-
     #pragma omp parallel for
     for (int n = 0; n < batchsize; ++n) {
         int current = pos + n;
@@ -89,17 +118,8 @@ void numa_oblivious_test()
 
 void numa_aware_test()
 {
-    if (numa_available() < 0)  {
-        printf("Error: no numa node avaliable on this system...\n");
-        exit(1);
-    }
-
-    /* detect cpus and numa nodes */
-    int ncpus = numa_num_configured_cpus();
-    int nodes = numa_num_configured_nodes();
-    int cpus_per_node = ncpus / nodes;
-
-    printf("The number of configured cpus in the system is %d\n", ncpus);
+    int ncpus, nodes, cpus_per_node;
+    system_detect(ncpus, nodes, cpus_per_node);
 
     omp_set_dynamic(0);
     omp_set_num_threads(ncpus);
