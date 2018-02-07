@@ -25,6 +25,9 @@
 
 #include "timer.hpp"
 
+#include "emmintrin.h"
+#include "immintrin.h"
+
 //////////////////////////////////////////////////////////////////
 
 /* Global configuration */
@@ -97,13 +100,18 @@ void numa_oblivious_test()
 
     system_detect();
 
-    double *_volume = (double*)malloc(dim * dim * (dim / 2 + 1) * 2 * sizeof(double));
-    double *_weight = (double*)malloc(dim * dim * (dim / 2 + 1) * sizeof(double));
+    const int volsize = dim * dim * (dim / 2 + 1);
+
+    double *_volume = (double*)malloc(volsize * 2 * sizeof(double));
+    double *_weight = (double*)malloc(volsize * sizeof(double));
 
     int *_coords = (int*)malloc(batchsize * sizeof(int));
     double *_voxels_real = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_imag = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_weit = (double*)malloc(batchsize * sizeof(double));
+
+    const size_t total_mem = (volsize * 3 + batchsize * 3) * sizeof(double)
+                           + batchsize * sizeof(int);
 
     Timer timer;
     timer.start();
@@ -112,6 +120,8 @@ void numa_oblivious_test()
 
     timer.interval_timing("Data reading");
 
+#if 0
+    /* baseline */
     int pos = 0;
     #pragma omp parallel for
     for (int n = 0; n < batchsize; ++n) {
@@ -119,15 +129,66 @@ void numa_oblivious_test()
 
         int index = _coords[current];
 
-        #pragma omp atomic
-        _volume[index * 2] += _voxels_real[current];
-        #pragma omp atomic
-        _volume[index * 2 + 1] += _voxels_imag[current];
-        #pragma omp atomic
-        _weight[index * 2] += _voxels_weit[current];
-    }
+        //#pragma omp atomic
+        //_volume[index * 2] += _voxels_real[current];
+        //#pragma omp atomic
+        //_volume[index * 2 + 1] += _voxels_imag[current];
+        //#pragma omp atomic
+        //_weight[index * 2] += _voxels_weit[current];
 
-    timer.interval_timing("Accumulating");
+        /* bandwidth test */ 
+        _volume[index * 2] = _voxels_real[current];
+        _volume[index * 2 + 1] = _voxels_imag[current];
+        _weight[index * 2] = _voxels_weit[current];
+    }
+#else
+#define VEC_TILE 2
+    /* vectorization */ 
+    __m256i reg_mask = _mm256_set_epi64x(0, -1, 0, -1);
+
+    #pragma omp parallel for
+    for (int n = 0; n < batchsize / VEC_TILE; n += 2) {
+        int index = _coords[n];
+
+        /* ------------------------------------------------------------- *
+         * Register layout:
+         *
+         * [255:192]|[191:128]|[127:64]|[63:0] = [im2]|[im1]|[rl2]|[rl1]
+         * ------------------------------------------------------------- */
+
+        /* load */
+        __m256d reg_im_rl = _mm256_loadu2_m128d(_voxels_imag + n,
+                                                _voxels_real + n);
+
+        __m256d reg_voxel = _mm256_loadu_pd(_volume + index * 2);
+
+        /* add */
+        reg_voxel = _mm256_add_pd(reg_voxel, reg_im_rl);
+
+        /* store */
+        _mm256_storeu_pd(_volume + index * 2, reg_voxel);
+
+        //_weight[index * 2] += _voxels_weit[n];
+
+        /* load 2 weights with imaginary part zero */
+        __m256d reg_vol_weit = _mm256_maskload_pd(_weight + index * 2, reg_mask);
+
+        /* load weights from _voxel steram */
+        __m128d reg_vxl_weit_0 = _mm_load_sd(_voxels_weit + n);
+        __m128d reg_vxl_weit_1 = _mm_load_sd(_voxels_weit + n + 1);
+        __m256d reg_vxl_weit = _mm256_set_m128d(reg_vxl_weit_1, reg_vxl_weit_0);
+
+        /* add */
+        reg_vol_weit = _mm256_add_pd(reg_vol_weit, reg_vxl_weit);
+
+        /* store */
+        _mm256_storeu_pd(_voxels_weit + n, reg_vol_weit);
+    }
+#endif
+
+    double time_elapse = timer.interval_timing("Accumulating");
+
+    printf("Memory throughput: %.4f GB/s\n", (total_mem >> 30) / (time_elapse / 1e6));
 
     free(_volume);
     free(_weight);
@@ -162,11 +223,21 @@ void numa_node_local_test()
 
     /* configure omp threads */
     omp_set_dynamic(0);
-    omp_set_num_threads(num_cpus_onnode);
+    //omp_set_num_threads(num_cpus_onnode);
 
+    //#pragma omp parallel for
+    //for (int tid = 0; tid < num_cpus_onnode; tid++) {
+    //    if (numa_run_on_node(node) != 0) {
+    //        printf("Error: thread configuration on specified node failed\n");
+    //        exit(-1);
+    //    }
+    //}
+    
+    omp_set_num_threads(ncpus);
     #pragma omp parallel for
-    for (int tid = 0; tid < num_cpus_onnode; tid++) {
-        if (numa_run_on_node(node) != 0) {
+    for (int tid = 0; tid < ncpus; tid++) {
+        int nid = tid / num_cpus_onnode;
+        if (numa_run_on_node(nid) != 0) {
             printf("Error: thread configuration on specified node failed\n");
             exit(-1);
         }

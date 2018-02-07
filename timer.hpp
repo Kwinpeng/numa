@@ -16,23 +16,27 @@ class Timer {
             _stop = _begin;
         }
 
-        void interval_timing(const char *info = NULL) {
+        double interval_timing(const char *info = NULL) {
             struct timeval now;
             gettimeofday(&now, NULL);
+
             if (info) printf("%s", info);
-            time_interval(_stop, now);
+            double elapse = time_interval(_stop, now);
             _stop = now;
+
+            return elapse;
         }
 
-        void timing(const char *info = NULL) {
+        double timing(const char *info = NULL) {
             struct timeval now;
             gettimeofday(&now, NULL);
+
             if (info) printf("%s", info);
-            time_interval(_begin, now);
+            return time_interval(_begin, now);
         }
 
-        void time_interval(struct timeval begin, struct timeval end) {
-            double interval = 0.0f;
+        double time_interval(struct timeval begin, struct timeval end) {
+            double interval = 0.0;
             if (end.tv_usec < begin.tv_usec) {
                 interval = end.tv_usec + 1e6 - begin.tv_usec
                          + (end.tv_sec - 1 - begin.tv_sec) * 1e6;
@@ -41,6 +45,7 @@ class Timer {
                          + (end.tv_sec - begin.tv_sec) * 1e6;
             }
             printf(" time consumed: %.2fus\n", interval);
+            return interval;
         }
 
     private:
