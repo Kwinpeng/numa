@@ -62,6 +62,67 @@ void read_data(const int size,
     fclose(fp);
 }
 
+/***
+ * @breif Search for the numa partition boundary in the download coordi
+ *        -nate stream, using this to distribute task in the following
+ *        accumulation.
+ * 
+ * @param numasize: single node memory size, which means the number of
+ *                  elements a numa node holds.
+ */
+inline int search(int numasize, int *coords, int batchsize)
+{
+    int left = 0, right = batchsize;
+    while (left < right) {
+        int mid = (left + right) / 2;
+        if (numasize < coords[mid]) {
+            right = mid - 1;
+        } else {
+            left = mid + 1;
+        }
+    }
+
+    return right;
+}
+
+void coord_voxel_analytics()
+{
+    printf("========================================\n");
+    printf("Download coord-voxel stream analytics\n");
+    printf("----------------------------------------\n");
+
+    const int volsize = dim * dim * (dim / 2 + 1);
+
+    /* allocate memory */
+    int *_coords = (int*)malloc(batchsize * sizeof(int));
+    double *_voxels_real = (double*)malloc(batchsize * sizeof(double));
+    double *_voxels_imag = (double*)malloc(batchsize * sizeof(double));
+    double *_voxels_weit = (double*)malloc(batchsize * sizeof(double));
+
+    const size_t total_mem = (volsize * 3 + batchsize * 3) * sizeof(double)
+                           + batchsize * sizeof(int);
+
+    /* read data from file */
+    read_data(batchsize, _coords, _voxels_real, _voxels_imag, _voxels_weit);
+
+    Timer timer;
+    timer.start();
+
+    /* binary search for numa partition boundary */
+    const int numa_boundary = search(volsize / 2, _coords, batchsize);
+
+    timer.interval_timing("search for numa binary");
+
+    printf(" download batchsize is %d\n", batchsize);
+    printf(" searched index in coords: %d\n", numa_boundary);
+    for (int i = numa_boundary - 5; i < numa_boundary + 5; i++) {
+        printf("   coords stream[%d]: %d\n", i, _coords[i]);
+    }
+
+    printf(" half volume index is %d\n", volsize / 2);
+
+}
+
 void system_detect(int& ncpus, int& nodes, int& cpus_per_node)
 {
     if (numa_available() < 0)  {
@@ -290,6 +351,89 @@ void numa_node_local_test()
     numa_free(numa_vxls_weit, batchsize * sizeof(double));
 }
 
+void nuam_aware_two_node()
+{
+    printf("========================================\n");
+    printf("NUMA aware two node test\n");
+    printf("----------------------------------------\n");
+
+#define NUM_NODES 2
+
+    int ncpus, nodes, cpus_per_node;
+    system_detect(ncpus, nodes, cpus_per_node);
+
+    /* configure omp threads */
+    omp_set_dynamic(0);
+    omp_set_num_threads(ncpus);
+
+    #pragma omp parallel for
+    for (int tid = 0; tid < ncpus; tid++) {
+        int nid = tid / cpus_per_node;
+        if (numa_run_on_node(nid) != 0) {
+            printf("Error: thread configuration on specified node failed\n");
+            exit(-1);
+        }
+    }
+
+    /* allocate numa-aware memory on node local */
+    const int volsize = dim * dim * (dim / 2 + 1);
+    const int partition_volsize = volsize / 2;
+
+    double *numa_volume[NUM_NODES], *numa_weight[NUM_NODES];
+    int    *numa_coords[NUM_NODES];
+    double *numa_vxls_real[NUM_NODES];
+    double *numa_vxls_imag[NUM_NODES];
+    double *numa_vxls_weit[NUM_NODES];
+
+    for (int nid = 0; nid < NUM_NODES; nid++) {
+        numa_volume[nid] = (double*)numa_alloc_onnode(
+                                    partition_volsize * 2 * sizeof(double), nid);
+        numa_weight[nid] = (double*)numa_alloc_onnode(
+                                    partition_volsize * sizeof(double), nid);
+
+        numa_coords[nid]    = (int*)numa_alloc_onnode(
+                                       batchsize * sizeof(int), nid);
+        numa_vxls_real[nid] = (double*)numa_alloc_onnode(
+                                       batchsize * sizeof(double), nid);
+        numa_vxls_imag[nid] = (double*)numa_alloc_onnode(
+                                       batchsize * sizeof(double), nid);
+        numa_vxls_weit[nid] = (double*)numa_alloc_onnode(
+                                       batchsize * sizeof(double), nid);
+    }
+
+    Timer timer;
+    timer.start();
+
+    ///* read form file */
+    //read_data(batchsize, numa_coords, numa_vxls_real, numa_vxls_imag, numa_vxls_weit);
+
+    //timer.interval_timing("Data reading");
+
+    ///* perform accumulation */
+    //int pos = 0;
+    //#pragma omp parallel for
+    //for (int n = 0; n < batchsize; ++n) {
+    //    int current = pos + n;
+
+    //    int index = numa_coords[current];
+
+    //    #pragma omp atomic
+    //    numa_volume[index * 2] += numa_vxls_real[current];
+    //    #pragma omp atomic
+    //    numa_volume[index * 2 + 1] += numa_vxls_imag[current];
+    //    #pragma omp atomic
+    //    numa_weight[index * 2] += numa_vxls_weit[current];
+    //}
+
+    //timer.interval_timing("Accumulating");
+
+    //numa_free(numa_volume, volsize * 2 * sizeof(double));
+    //numa_free(numa_weight, volsize * sizeof(double));
+    //numa_free(numa_vxls_real, batchsize * sizeof(double));
+    //numa_free(numa_vxls_imag, batchsize * sizeof(double));
+    //numa_free(numa_vxls_weit, batchsize * sizeof(double));
+}
+
 void numa_aware_test()
 {
     int ncpus, nodes, cpus_per_node;
@@ -313,9 +457,11 @@ void numa_aware_test()
 
 int main(int argc, char *argv[])
 {
-    numa_oblivious_test();
+    //numa_oblivious_test();
 
     //numa_node_local_test();
+    
+    coord_voxel_analytics();
 
     return 0;
 }
