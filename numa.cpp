@@ -35,7 +35,34 @@ const int pf  = 2;
 const int dim = 280 * pf;
 const int batchsize = 29093774;
 
+const int volsize = dim * dim * (dim / 2 + 1);
+const size_t total_mem = (volsize * 3 + batchsize * 3) * sizeof(double)
+                       + batchsize * sizeof(int);
+
 //////////////////////////////////////////////////////////////////
+
+/***
+ * @breif Search for the numa partition boundary in the download
+ *        coordinate stream, using this to distribute task in the
+ *        following accumulation.
+ * 
+ * @param numasize: single node memory size, which means the number
+ *                  of elements a numa node holds.
+ */
+inline int search(int numasize, int *coords, int batchsize)
+{
+    int left = 0, right = batchsize;
+    while (left < right) {
+        int mid = (left + right) / 2;
+        if (numasize < coords[mid]) {
+            right = mid - 1;
+        } else {
+            left = mid + 1;
+        }
+    }
+
+    return right;
+}
 
 void read_data(const int size,
                int *_coords,
@@ -62,27 +89,50 @@ void read_data(const int size,
     fclose(fp);
 }
 
-/***
- * @breif Search for the numa partition boundary in the download coordi
- *        -nate stream, using this to distribute task in the following
- *        accumulation.
- * 
- * @param numasize: single node memory size, which means the number of
- *                  elements a numa node holds.
- */
-inline int search(int numasize, int *coords, int batchsize)
+int read_data(const int half_volsize,
+              const int length,
+              int *_coords[],
+              double *_voxels_real[],
+              double *_voxels_imag[],
+              double *_voxels_weit[])
 {
-    int left = 0, right = batchsize;
-    while (left < right) {
-        int mid = (left + right) / 2;
-        if (numasize < coords[mid]) {
-            right = mid - 1;
-        } else {
-            left = mid + 1;
-        }
-    }
+    FILE *fp;
+    int *coords = (int*)malloc(length * sizeof(int));
 
-    return right;
+    assert((fp = fopen("data/coor.dat", "rb")) != NULL);
+    assert(length == fread(coords, sizeof(int), length, fp));
+    fclose(fp);
+
+    const int partition_boundary = search(half_volsize, coords, length);
+
+    /* partition numa coords */
+    memcpy(_coords[0], coords, partition_boundary * sizeof(int));
+    memcpy(_coords[0] + partition_boundary,
+           coords + partition_boundary,
+           (length - partition_boundary) * sizeof(int));
+
+    /* partition real imag and weit*/
+    assert((fp = fopen("data/real.dat", "rb")) != NULL);
+    assert(partition_boundary == fread(_voxels_real[0],
+                sizeof(double), partition_boundary, fp));
+    assert((length - partition_boundary) == fread(_voxels_real[1],
+                sizeof(double), (length - partition_boundary), fp));
+    fclose(fp);
+
+    assert((fp = fopen("data/imag.dat", "rb")) != NULL);
+    assert(partition_boundary == fread(_voxels_imag[0],
+                sizeof(double), partition_boundary, fp));
+    assert((length - partition_boundary) == fread(_voxels_imag[1],
+                sizeof(double), (length - partition_boundary), fp));
+
+    assert((fp = fopen("data/weit.dat", "rb")) != NULL);
+    assert(partition_boundary == fread(_voxels_weit[0],
+                sizeof(double), partition_boundary, fp));
+    assert((length - partition_boundary) == fread(_voxels_weit[1],
+                sizeof(double), (length - partition_boundary), fp));
+    fclose(fp);
+
+    return partition_boundary;
 }
 
 void coord_voxel_analytics()
@@ -91,16 +141,11 @@ void coord_voxel_analytics()
     printf("Download coord-voxel stream analytics\n");
     printf("----------------------------------------\n");
 
-    const int volsize = dim * dim * (dim / 2 + 1);
-
     /* allocate memory */
     int *_coords = (int*)malloc(batchsize * sizeof(int));
     double *_voxels_real = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_imag = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_weit = (double*)malloc(batchsize * sizeof(double));
-
-    const size_t total_mem = (volsize * 3 + batchsize * 3) * sizeof(double)
-                           + batchsize * sizeof(int);
 
     /* read data from file */
     read_data(batchsize, _coords, _voxels_real, _voxels_imag, _voxels_weit);
@@ -161,8 +206,6 @@ void numa_oblivious_test()
 
     system_detect();
 
-    const int volsize = dim * dim * (dim / 2 + 1);
-
     double *_volume = (double*)malloc(volsize * 2 * sizeof(double));
     double *_weight = (double*)malloc(volsize * sizeof(double));
 
@@ -170,9 +213,6 @@ void numa_oblivious_test()
     double *_voxels_real = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_imag = (double*)malloc(batchsize * sizeof(double));
     double *_voxels_weit = (double*)malloc(batchsize * sizeof(double));
-
-    const size_t total_mem = (volsize * 3 + batchsize * 3) * sizeof(double)
-                           + batchsize * sizeof(int);
 
     Timer timer;
     timer.start();
@@ -284,17 +324,8 @@ void numa_node_local_test()
 
     /* configure omp threads */
     omp_set_dynamic(0);
-    //omp_set_num_threads(num_cpus_onnode);
-
-    //#pragma omp parallel for
-    //for (int tid = 0; tid < num_cpus_onnode; tid++) {
-    //    if (numa_run_on_node(node) != 0) {
-    //        printf("Error: thread configuration on specified node failed\n");
-    //        exit(-1);
-    //    }
-    //}
-    
     omp_set_num_threads(ncpus);
+
     #pragma omp parallel for
     for (int tid = 0; tid < ncpus; tid++) {
         int nid = tid / num_cpus_onnode;
@@ -305,8 +336,6 @@ void numa_node_local_test()
     }
 
     /* allocate numa-aware memory on node local */
-    const int volsize = dim * dim * (dim / 2 + 1);
-
     double *numa_volume, *numa_weight;
     numa_volume = (double*)numa_alloc_onnode(volsize * 2 * sizeof(double), node);
     numa_weight = (double*)numa_alloc_onnode(volsize * sizeof(double), node);
@@ -342,7 +371,9 @@ void numa_node_local_test()
         numa_weight[index * 2] += numa_vxls_weit[current];
     }
 
-    timer.interval_timing("Accumulating");
+    double time_elapse = timer.interval_timing("Accumulating");
+
+    printf("Memory throughput: %.4f GB/s\n", (total_mem >> 30) / (time_elapse / 1e6));
 
     numa_free(numa_volume, volsize * 2 * sizeof(double));
     numa_free(numa_weight, volsize * sizeof(double));
@@ -351,7 +382,7 @@ void numa_node_local_test()
     numa_free(numa_vxls_weit, batchsize * sizeof(double));
 }
 
-void nuam_aware_two_node()
+void numa_aware_two_node()
 {
     printf("========================================\n");
     printf("NUMA aware two node test\n");
@@ -376,7 +407,6 @@ void nuam_aware_two_node()
     }
 
     /* allocate numa-aware memory on node local */
-    const int volsize = dim * dim * (dim / 2 + 1);
     const int partition_volsize = volsize / 2;
 
     double *numa_volume[NUM_NODES], *numa_weight[NUM_NODES];
@@ -404,34 +434,52 @@ void nuam_aware_two_node()
     Timer timer;
     timer.start();
 
-    ///* read form file */
-    //read_data(batchsize, numa_coords, numa_vxls_real, numa_vxls_imag, numa_vxls_weit);
+    /* read data from file */
+    const int partition_boundary = read_data(partition_volsize, batchsize, 
+              numa_coords, numa_vxls_real, numa_vxls_imag, numa_vxls_weit);
 
-    //timer.interval_timing("Data reading");
+    timer.interval_timing(" Data reading");
 
-    ///* perform accumulation */
-    //int pos = 0;
-    //#pragma omp parallel for
-    //for (int n = 0; n < batchsize; ++n) {
-    //    int current = pos + n;
+    /* perform accumulation */
+    #pragma omp parallel
+    {
+        int nid = omp_get_thread_num() / cpus_per_node;
 
-    //    int index = numa_coords[current];
+        #pragma omp for nowait
+        for (int n = 0; n < partition_boundary; ++n) {
 
-    //    #pragma omp atomic
-    //    numa_volume[index * 2] += numa_vxls_real[current];
-    //    #pragma omp atomic
-    //    numa_volume[index * 2 + 1] += numa_vxls_imag[current];
-    //    #pragma omp atomic
-    //    numa_weight[index * 2] += numa_vxls_weit[current];
-    //}
+            int index = numa_coords[0][n];
 
-    //timer.interval_timing("Accumulating");
+            numa_volume[0][index * 2]     += numa_vxls_real[0][n];
+            numa_volume[0][index * 2 + 1] += numa_vxls_imag[0][n];
+            numa_weight[0][index * 2]     += numa_vxls_weit[0][n];
+        }
 
-    //numa_free(numa_volume, volsize * 2 * sizeof(double));
-    //numa_free(numa_weight, volsize * sizeof(double));
-    //numa_free(numa_vxls_real, batchsize * sizeof(double));
-    //numa_free(numa_vxls_imag, batchsize * sizeof(double));
-    //numa_free(numa_vxls_weit, batchsize * sizeof(double));
+        #pragma omp for
+        for (int n = 0; n < batchsize - partition_boundary; ++n) {
+
+            int index = numa_coords[1][n];
+
+            numa_volume[1][index * 2]     += numa_vxls_real[1][n];
+            numa_volume[1][index * 2 + 1] += numa_vxls_imag[1][n];
+            numa_weight[1][index * 2]     += numa_vxls_weit[1][n];
+        }
+    }
+
+    double time_elapse = timer.interval_timing(" Accumulating");
+
+    printf("Memory throughput: %.4f GB/s\n", (total_mem >> 30) / (time_elapse / 1e6));
+    
+    /* numa free */
+    for (int nid = 0; nid < NUM_NODES; nid++) {
+        numa_free(numa_volume[nid], partition_volsize * 2 * sizeof(double));
+        numa_free(numa_weight[nid], partition_volsize * sizeof(double));
+
+        numa_free(numa_coords[nid],    batchsize * sizeof(int));
+        numa_free(numa_vxls_real[nid], batchsize * sizeof(double));
+        numa_free(numa_vxls_imag[nid], batchsize * sizeof(double));
+        numa_free(numa_vxls_weit[nid], batchsize * sizeof(double));
+    }
 }
 
 void numa_aware_test()
@@ -450,18 +498,19 @@ void numa_aware_test()
             exit(-1);
         }
     }
-
 }
 
 //////////////////////////////////////////////////////////////////
 
 int main(int argc, char *argv[])
 {
-    //numa_oblivious_test();
+    //coord_voxel_analytics();
 
-    //numa_node_local_test();
+    numa_oblivious_test();
+
+    numa_node_local_test();
     
-    coord_voxel_analytics();
+    numa_aware_two_node();
 
     return 0;
 }
