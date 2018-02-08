@@ -10,6 +10,7 @@
  *   1. test numa
  *   2. vectorization [avx2]
  *   3. implement two-node numa-aware accumulation
+ *   4. loop fusion
  *
  ****************************************************************/
 
@@ -472,31 +473,49 @@ void numa_aware_two_node()
      * Task distribution between two groups of NUMA threads.
      *
      * The i-th thread accumulate the voxels with the coordinates
-     * read from coords[end[i]] to coords[end[i+1]].
+     * read from coords[task[i]] to coords[task[i+1]].
      *
      * Allocate the task distribution index array in numa-aware
      * style.
      *************************************************************/
     #pragma omp parallel
     {
-        int nid = omp_get_thread_num() / cpus_per_node;
+        //int nid = omp_get_thread_num() / cpus_per_node;
 
-        for (int n = 0; n < batchsize; ++n) {
+        //for (int n = 0; n < batchsize; ++n) {
 
-            int index = numa_coords[0][n];
+        //    int index = numa_coords[0][n];
 
-            numa_volume[0][index * 2]     += numa_vxls_real[0][n];
-            numa_volume[0][index * 2 + 1] += numa_vxls_imag[0][n];
-            numa_weight[0][index * 2]     += numa_vxls_weit[0][n];
-        }
+        //    numa_volume[0][index * 2]     += numa_vxls_real[0][n];
+        //    numa_volume[0][index * 2 + 1] += numa_vxls_imag[0][n];
+        //    numa_weight[0][index * 2]     += numa_vxls_weit[0][n];
+        //}
 
-        for (int n = 0; n < batchsize - partition_boundary; ++n) {
+        //for (int n = 0; n < batchsize - partition_boundary; ++n) {
 
-            int index = numa_coords[1][n];
+        //    int index = numa_coords[1][n];
 
-            numa_volume[1][index * 2]     += numa_vxls_real[1][n];
-            numa_volume[1][index * 2 + 1] += numa_vxls_imag[1][n];
-            numa_weight[1][index * 2]     += numa_vxls_weit[1][n];
+        //    numa_volume[1][index * 2]     += numa_vxls_real[1][n];
+        //    numa_volume[1][index * 2 + 1] += numa_vxls_imag[1][n];
+        //    numa_weight[1][index * 2]     += numa_vxls_weit[1][n];
+        //}
+
+        /* distribute task */
+        const int tid = omp_get_thread_num();
+        const int nid = tid / cpus_per_node;
+
+        /* allocate NUMA aware task */
+        // TODO
+        // calculate index based on partition_boundary
+        int task[1024];
+
+        /* do task */
+        for (int n = task[tid]; n < task[tid + 1]; ++n) {
+            int index = numa_coords[tid][n];
+
+            numa_volume[tid][index * 2]     += numa_vxls_real[tid][n];
+            numa_volume[tid][index * 2 + 1] += numa_vxls_imag[tid][n];
+            numa_weight[tid][index * 2]     += numa_vxls_weit[tid][n];
         }
     }
 #endif
