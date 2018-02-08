@@ -36,8 +36,8 @@ const int dim = 280 * pf;
 const int batchsize = 29093774;
 
 const int volsize = dim * dim * (dim / 2 + 1);
-const size_t total_mem = (volsize * 3 + batchsize * 3) * sizeof(double)
-                       + batchsize * sizeof(int);
+const size_t total_mem = (batchsize * 3 * 2) * sizeof(double)
+                        + batchsize * sizeof(int);
 
 //////////////////////////////////////////////////////////////////
 
@@ -508,9 +508,9 @@ int main(int argc, char *argv[])
 
     numa_oblivious_test();
 
-    numa_node_local_test();
-    
-    numa_aware_two_node();
+    //numa_node_local_test();
+
+    //numa_aware_two_node();
 
     return 0;
 }
