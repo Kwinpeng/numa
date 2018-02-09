@@ -1,8 +1,10 @@
 CC = icpc
+
 FLAGS = -fopenmp \
 	   	-mavx \
 		-msse2 \
-		#-O2 -ftree-vectorize -msse2 -ftree-vectorizer-verbose=5
+		-g \
+		-O0 \
 
 INCS = -I.
 
